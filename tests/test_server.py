@@ -165,6 +165,7 @@ class ParserTests(unittest.TestCase):
                  patch.object(server, "OPENAPI_PATH", Path("/missing-openapi.json")):
                 connection = HTTPConnection("127.0.0.1", httpd.server_port)
                 try:
+                    canonical_bodies = {}
                     for path, status, content_type in (
                         ("/", 302, None),
                         ("/docs", 200, "text/html"),
@@ -181,11 +182,33 @@ class ParserTests(unittest.TestCase):
                             if path == "/":
                                 self.assertEqual(response.getheader("Location"), "docs")
                             elif path == "/docs":
+                                canonical_bodies[path] = body
                                 self.assertIn(b"url: 'openapi.json'", body)
                                 self.assertIn(b"swagger-ui-dist@5.33.0", body)
                                 self.assertEqual(body.count(b'integrity="sha384-'), 2)
                             else:
+                                canonical_bodies[path] = body
                                 self.assertEqual(json.loads(body), spec)
+                    for alias, location, canonical, content_type in (
+                        ("/docs/", "../docs", "/docs", "text/html"),
+                        ("/docs/openapi.json", "../openapi.json", "/openapi.json",
+                         "application/json"),
+                    ):
+                        with self.subTest(alias=alias):
+                            connection.request("GET", alias)
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 302)
+                            self.assertEqual(response.getheader("Location"), location)
+                            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+                            self.assertEqual(response.read(), b"")
+                            followed_path = urljoin(alias, location)
+                            self.assertEqual(followed_path, canonical)
+                            connection.request("GET", followed_path)
+                            response = connection.getresponse()
+                            self.assertEqual(response.status, 200)
+                            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+                            self.assertTrue(response.getheader("Content-Type").startswith(content_type))
+                            self.assertEqual(response.read(), canonical_bodies[canonical])
                 finally:
                     connection.close()
             self.assertEqual(spec["openapi"], "3.1.0")
@@ -194,6 +217,11 @@ class ParserTests(unittest.TestCase):
             self.assertEqual(urljoin("https://example.test/api/", "docs"),
                              "https://example.test/api/docs")
             self.assertEqual(urljoin("https://example.test/api/docs", "openapi.json"),
+                             "https://example.test/api/openapi.json")
+            self.assertEqual(urljoin("https://example.test/api/docs/", "../docs"),
+                             "https://example.test/api/docs")
+            self.assertEqual(urljoin("https://example.test/api/docs/openapi.json",
+                                          "../openapi.json"),
                              "https://example.test/api/openapi.json")
             self.assertEqual(urljoin("https://example.test/api/openapi.json",
                                           spec["servers"][0]["url"]), "https://example.test/api/")

@@ -46,6 +46,8 @@ The code's default `LEOX_BASE_URL` is an example OPNsense listener at
 Open [http://127.0.0.1:8085/docs](http://127.0.0.1:8085/docs) for interactive
 Swagger UI. Its source definition is available as OpenAPI 3.1 JSON at
 [http://127.0.0.1:8085/openapi.json](http://127.0.0.1:8085/openapi.json).
+`/docs/` redirects to `/docs`, and `/docs/openapi.json` redirects to the
+canonical `/openapi.json` URL.
 These routes are also available on the configured LAN bind IP and port. `/`
 redirects to `/docs`. Swagger UI loads pinned assets from jsDelivr, so the
 browser needs internet access to display the page; the JSON definition works
