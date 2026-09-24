@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -22,6 +23,27 @@ TIMEOUT = float(os.environ.get("LEOX_TIMEOUT", "5"))
 USERNAME = os.environ.get("LEOX_USERNAME", "")
 PASSWORD = os.environ.get("LEOX_PASSWORD", "")
 PROXY_TOKEN = os.environ.get("LEOX_PROXY_TOKEN", "")
+OPENAPI_PATH = Path(__file__).with_name("openapi.json")
+OPENAPI_JSON = OPENAPI_PATH.read_bytes()
+DOCS_HTML = b"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LEOX status API docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.0/swagger-ui.css" integrity="sha384-Ov4/wv3j2bmct8cDc5X4ngJZohVPzEmc6uDPH8WeljUxO5vtoykvMEfbu9Vh6RaW" crossorigin="anonymous">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.33.0/swagger-ui-bundle.js" integrity="sha384-YDALVcy8kj8yltLBVi1vBiBAUqdxvus673gM8XKwiy6aDUJFXivF/KCufekjYbVf" crossorigin="anonymous"></script>
+  <script>
+    window.onload = function () {
+      SwaggerUIBundle({url: 'openapi.json', dom_id: '#swagger-ui'});
+    };
+  </script>
+</body>
+</html>
+"""
 
 
 class StatusTable(HTMLParser):
@@ -235,7 +257,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         try:
-            if path == "/health":
+            if path == "/":
+                self.send_response(302)
+                self.send_header("Location", "docs")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            elif path == "/docs":
+                self.respond_bytes(200, DOCS_HTML, "text/html; charset=utf-8")
+                return
+            elif path == "/openapi.json":
+                self.respond_bytes(200, OPENAPI_JSON, "application/json")
+                return
+            elif path == "/health":
                 data = {"status": "healthy"}
             elif path == "/pon":
                 data = parse_pon(fetch("/status_pon.asp"))
@@ -255,8 +290,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def respond(self, code, data):
         body = json.dumps(data).encode()
+        self.respond_bytes(code, body, "application/json")
+
+    def respond_bytes(self, code, body, content_type):
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
