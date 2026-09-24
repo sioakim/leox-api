@@ -1,0 +1,13 @@
+services:
+  leox-api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${LEOX_API_BIND_IP:-127.0.0.1}:${LEOX_API_PORT:-8085}:8000"
+    environment:
+      LEOX_BASE_URL: ${LEOX_BASE_URL:-http://10.0.0.1:8100}
+      LEOX_DEVICE_IP: ${LEOX_DEVICE_IP:-192.168.100.1}
+      LEOX_USERNAME: ${LEOX_USERNAME}
+      LEOX_PASSWORD: ${LEOX_PASSWORD}
+      LEOX_PROXY_TOKEN: ${LEOX_PROXY_TOKEN}
+      LEOX_TIMEOUT: ${LEOX_TIMEOUT:-5}
