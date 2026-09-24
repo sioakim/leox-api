@@ -2,12 +2,14 @@ import json
 import sys
 import threading
 import unittest
-from http.client import HTTPResponse
+from datetime import datetime
+from http.client import HTTPConnection, HTTPResponse
 from http.server import ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import urljoin
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,6 +35,41 @@ LAN = "<table><tr><td>LAN1</td><td>Up, 10Gb, Full</td></tr></table>"
 
 
 class ParserTests(unittest.TestCase):
+    def assert_matches_schema(self, value, schema, spec):
+        if "$ref" in schema:
+            name = schema["$ref"].split("/")[-1]
+            return self.assert_matches_schema(value, spec["components"]["schemas"][name], spec)
+        types = schema.get("type")
+        if types is not None:
+            types = types if isinstance(types, list) else [types]
+            matches = {
+                "null": lambda: value is None,
+                "object": lambda: isinstance(value, dict),
+                "array": lambda: isinstance(value, list),
+                "string": lambda: isinstance(value, str),
+                "integer": lambda: isinstance(value, int) and not isinstance(value, bool),
+                "number": lambda: isinstance(value, (int, float)) and not isinstance(value, bool),
+            }
+            self.assertTrue(any(matches[kind]() for kind in types), (value, types))
+        if "const" in schema:
+            self.assertEqual(value, schema["const"])
+        if "enum" in schema:
+            self.assertIn(value, schema["enum"])
+        if "minimum" in schema:
+            self.assertGreaterEqual(value, schema["minimum"])
+        if schema.get("format") == "date-time":
+            self.assertIsNotNone(datetime.fromisoformat(value).tzinfo)
+        if isinstance(value, dict):
+            self.assertTrue(set(schema.get("required", [])).issubset(value))
+            if schema.get("additionalProperties") is False:
+                self.assertEqual(set(value), set(schema["properties"]))
+            for key, field_value in value.items():
+                if key in schema.get("properties", {}):
+                    self.assert_matches_schema(field_value, schema["properties"][key], spec)
+        elif isinstance(value, list):
+            for item in value:
+                self.assert_matches_schema(item, schema["items"], spec)
+
     def test_real_shaped_pages(self):
         pon = server.parse_pon(PON)
         self.assertEqual(pon["onu_state"], "O5")
@@ -108,7 +145,125 @@ class ParserTests(unittest.TestCase):
                     urlopen(f"http://127.0.0.1:{httpd.server_port}/pon")
                 with context.exception as response:
                     self.assertEqual(response.code, 502)
-                    self.assertIn("ONU State", json.load(response)["error"])
+                    payload = json.load(response)
+                    self.assertIn("ONU State", payload["error"])
+                    spec = json.loads(server.OPENAPI_JSON)
+                    schema = spec["components"]["responses"]["UpstreamError"]["content"]
+                    self.assert_matches_schema(payload, schema["application/json"]["schema"], spec)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            worker.join()
+
+    def test_documentation_routes_and_openapi_shapes(self):
+        spec = json.loads(server.OPENAPI_JSON)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with patch.object(server, "fetch", side_effect=AssertionError("docs contacted device")), \
+                 patch.object(server, "OPENAPI_PATH", Path("/missing-openapi.json")):
+                connection = HTTPConnection("127.0.0.1", httpd.server_port)
+                try:
+                    for path, status, content_type in (
+                        ("/", 302, None),
+                        ("/docs", 200, "text/html"),
+                        ("/openapi.json", 200, "application/json"),
+                    ):
+                        with self.subTest(path=path):
+                            connection.request("GET", path)
+                            response = connection.getresponse()
+                            body = response.read()
+                            self.assertEqual(response.status, status)
+                            self.assertEqual(response.getheader("Cache-Control"), "no-store")
+                            if content_type:
+                                self.assertTrue(response.getheader("Content-Type").startswith(content_type))
+                            if path == "/":
+                                self.assertEqual(response.getheader("Location"), "docs")
+                            elif path == "/docs":
+                                self.assertIn(b"url: 'openapi.json'", body)
+                                self.assertIn(b"swagger-ui-dist@5.33.0", body)
+                                self.assertEqual(body.count(b'integrity="sha384-'), 2)
+                            else:
+                                self.assertEqual(json.loads(body), spec)
+                finally:
+                    connection.close()
+            self.assertEqual(spec["openapi"], "3.1.0")
+            self.assertEqual(spec["servers"], [{"url": "./", "description":
+                             "Same host and path prefix as this OpenAPI document"}])
+            self.assertEqual(urljoin("https://example.test/api/", "docs"),
+                             "https://example.test/api/docs")
+            self.assertEqual(urljoin("https://example.test/api/docs", "openapi.json"),
+                             "https://example.test/api/openapi.json")
+            self.assertEqual(urljoin("https://example.test/api/openapi.json",
+                                          spec["servers"][0]["url"]), "https://example.test/api/")
+            self.assertEqual(set(spec["paths"]),
+                             {"/health", "/pon", "/device", "/lan", "/system/stats", "/status"})
+            operation_ids = [operation["get"]["operationId"] for operation in spec["paths"].values()]
+            self.assertEqual(len(operation_ids), len(set(operation_ids)))
+            self.assertEqual(len(operation_ids), 6)
+            self.assertEqual(spec["components"]["responses"]["NotFound"]["content"]
+                             ["application/json"]["schema"]["$ref"], "#/components/schemas/Error")
+            schemas = spec["components"]["schemas"]
+            for name, expected in (
+                ("Health", {"status"}),
+                ("Pon", {"onu_state", "temperature_c", "voltage_mv", "tx_power_dbm",
+                         "rx_power_dbm", "current_ma"}),
+                ("Device", {"name", "model", "software_version"}),
+                ("SystemStats", {"uptime_seconds", "cpu_usage", "memory_usage", "flash_used_percent"}),
+                ("LanPort", {"name", "link", "speed", "duplex", "bytes_rx", "bytes_tx"}),
+                ("Status", {"name", "ip", "model", "version", "uptime_seconds", "pon", "system",
+                            "lan", "generated"}),
+            ):
+                with self.subTest(schema=name):
+                    self.assertEqual(set(schemas[name]["required"]), expected)
+                    self.assertEqual(set(schemas[name]["properties"]), expected)
+            self.assertEqual(schemas["Pon"]["properties"]["voltage_mv"]["type"], ["integer", "null"])
+            self.assertEqual(schemas["LanPort"]["properties"]["speed"]["type"], ["integer", "null"])
+            self.assertEqual(schemas["Status"]["properties"]["generated"]["format"], "date-time")
+            self.assertIn("COPY server.py openapi.json ./", Path(__file__).resolve().parents[1]
+                          .joinpath("Dockerfile").read_text())
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            worker.join()
+
+    def test_documented_response_fields_match_http_payloads(self):
+        pages = {"/status.asp": DEVICE, "/status_pon.asp": PON,
+                 "/lan_port_status.asp": LAN}
+        spec = json.loads(server.OPENAPI_JSON)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with patch.object(server, "fetch", side_effect=pages.__getitem__):
+                for path in spec["paths"]:
+                    with self.subTest(path=path):
+                        with urlopen(f"http://127.0.0.1:{httpd.server_port}{path}") as response:
+                            self.assertEqual(response.headers["Cache-Control"], "no-store")
+                            payload = json.load(response)
+                        schema = spec["paths"][path]["get"]["responses"]["200"]["content"]
+                        self.assert_matches_schema(payload, schema["application/json"]["schema"], spec)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            worker.join()
+
+    def test_undocumented_path_matches_not_found_response(self):
+        spec = json.loads(server.OPENAPI_JSON)
+        schema = spec["components"]["responses"]["NotFound"]["content"]
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with self.assertRaises(HTTPError) as context:
+                urlopen(f"http://127.0.0.1:{httpd.server_port}/missing")
+            with context.exception as response:
+                self.assertEqual(response.code, 404)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                payload = json.load(response)
+            self.assert_matches_schema(payload, schema["application/json"]["schema"], spec)
+            self.assertEqual(payload, {"error": "Not found"})
         finally:
             httpd.shutdown()
             httpd.server_close()

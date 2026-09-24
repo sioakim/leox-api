@@ -43,10 +43,20 @@ The code's default `LEOX_BASE_URL` is an example OPNsense listener at
 
 ## Endpoints
 
+Open [http://127.0.0.1:8085/docs](http://127.0.0.1:8085/docs) for interactive
+Swagger UI. Its source definition is available as OpenAPI 3.1 JSON at
+[http://127.0.0.1:8085/openapi.json](http://127.0.0.1:8085/openapi.json).
+These routes are also available on the configured LAN bind IP and port. `/`
+redirects to `/docs`. Swagger UI loads pinned assets from jsDelivr, so the
+browser needs internet access to display the page; the JSON definition works
+without the CDN.
+
 `/health`, `/pon`, `/device`, `/lan`, `/system/stats`, and `/status` return JSON.
 `/status` follows the response shape used by a ZTE dashboard adapter. Missing
 or unsupported readings become JSON `null`. Upstream failures and changed HTML
 layouts return HTTP 502 with an error message.
+JSON API and documentation responses include `Cache-Control: no-store` so
+changing readings are not cached.
 
 The `/status` JSON is enough for an agent to create a dashboard with device,
 optical, and LAN readings. This screenshot is one example; the dashboard

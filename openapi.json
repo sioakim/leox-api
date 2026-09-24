@@ -1,0 +1,161 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LEOX status API",
+    "version": "1.0.0",
+    "description": "Read-only device, optical, system, and LAN status. Upstream or parsing failures return HTTP 502. Unknown paths return HTTP 404 with `{\"error\": \"Not found\"}`; see the NotFound response component."
+  },
+  "servers": [{"url": "./", "description": "Same host and path prefix as this OpenAPI document"}],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Check that the API is running",
+        "description": "Does not contact the device.",
+        "responses": {
+          "200": {"description": "API is running", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Health"}}}}
+        }
+      }
+    },
+    "/pon": {
+      "get": {
+        "operationId": "getPon",
+        "summary": "Read optical status",
+        "responses": {
+          "200": {"description": "PON readings", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Pon"}}}},
+          "502": {"$ref": "#/components/responses/UpstreamError"}
+        }
+      }
+    },
+    "/device": {
+      "get": {
+        "operationId": "getDevice",
+        "summary": "Read device identity",
+        "responses": {
+          "200": {"description": "Device identity", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Device"}}}},
+          "502": {"$ref": "#/components/responses/UpstreamError"}
+        }
+      }
+    },
+    "/lan": {
+      "get": {
+        "operationId": "getLan",
+        "summary": "Read LAN port status",
+        "responses": {
+          "200": {"description": "LAN ports", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/LanPort"}}}}},
+          "502": {"$ref": "#/components/responses/UpstreamError"}
+        }
+      }
+    },
+    "/system/stats": {
+      "get": {
+        "operationId": "getSystemStats",
+        "summary": "Read system statistics",
+        "responses": {
+          "200": {"description": "System statistics", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SystemStats"}}}},
+          "502": {"$ref": "#/components/responses/UpstreamError"}
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "operationId": "getStatus",
+        "summary": "Read combined device status",
+        "description": "Combines device, optical, system, and LAN readings with a generation timestamp.",
+        "responses": {
+          "200": {"description": "Combined status", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Status"}}}},
+          "502": {"$ref": "#/components/responses/UpstreamError"}
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "NotFound": {
+        "description": "Unknown path",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      },
+      "UpstreamError": {
+        "description": "Device request or response parsing failed",
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
+      }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {"status": {"type": "string", "const": "healthy"}}
+      },
+      "Pon": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["onu_state", "temperature_c", "voltage_mv", "tx_power_dbm", "rx_power_dbm", "current_ma"],
+        "properties": {
+          "onu_state": {"type": "string", "description": "Device reported ONU state, such as O5."},
+          "temperature_c": {"type": ["number", "null"], "description": "Temperature in degrees Celsius."},
+          "voltage_mv": {"type": ["integer", "null"], "description": "Voltage in millivolts."},
+          "tx_power_dbm": {"type": ["number", "null"], "description": "Transmit optical power in dBm."},
+          "rx_power_dbm": {"type": ["number", "null"], "description": "Receive optical power in dBm."},
+          "current_ma": {"type": ["number", "null"], "description": "Bias current in milliamperes."}
+        }
+      },
+      "Device": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "model", "software_version"],
+        "properties": {
+          "name": {"type": "string"},
+          "model": {"type": "string"},
+          "software_version": {"type": "string"}
+        }
+      },
+      "SystemStats": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["uptime_seconds", "cpu_usage", "memory_usage", "flash_used_percent"],
+        "properties": {
+          "uptime_seconds": {"type": "integer", "minimum": 0},
+          "cpu_usage": {"type": ["number", "null"], "description": "CPU use as a percentage."},
+          "memory_usage": {"type": ["number", "null"], "description": "Memory use as a percentage."},
+          "flash_used_percent": {"type": "null", "description": "Unsupported by this device."}
+        }
+      },
+      "LanPort": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "link", "speed", "duplex", "bytes_rx", "bytes_tx"],
+        "properties": {
+          "name": {"type": "string", "const": "LAN1"},
+          "link": {"type": "string", "enum": ["Up", "Down"]},
+          "speed": {"type": ["integer", "null"], "description": "Negotiated speed in Mbps, when reported."},
+          "duplex": {"type": ["string", "null"]},
+          "bytes_rx": {"type": "null", "description": "Unsupported by this device."},
+          "bytes_tx": {"type": "null", "description": "Unsupported by this device."}
+        }
+      },
+      "Status": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "ip", "model", "version", "uptime_seconds", "pon", "system", "lan", "generated"],
+        "properties": {
+          "name": {"type": "string"},
+          "ip": {"type": "string", "description": "Configured device management IP."},
+          "model": {"type": "string"},
+          "version": {"type": "string", "description": "Device firmware version."},
+          "uptime_seconds": {"type": "integer", "minimum": 0},
+          "pon": {"$ref": "#/components/schemas/Pon"},
+          "system": {"$ref": "#/components/schemas/SystemStats"},
+          "lan": {"type": "array", "items": {"$ref": "#/components/schemas/LanPort"}},
+          "generated": {"type": "string", "format": "date-time", "description": "UTC response generation time."}
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["error"],
+        "properties": {"error": {"type": "string"}}
+      }
+    }
+  }
+}
