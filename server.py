@@ -257,9 +257,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         try:
-            if path == "/":
+            if path in ("/", "/docs/", "/docs/openapi.json"):
                 self.send_response(302)
-                self.send_header("Location", "docs")
+                self.send_header("Location", {
+                    "/": "docs",
+                    "/docs/": "../docs",
+                    "/docs/openapi.json": "../openapi.json",
+                }[path])
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
